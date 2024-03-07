@@ -6,74 +6,102 @@ import matplotlib.dates as mdates
 import datetime
 
 # Fetch data from Yahoo Finance
-ticker = "REEDR.IS"  # Example ticker symbol (you can change it)
-start_date = "2020-01-01"
-end_date = "2024-03-06"
+ticker = "SOKM.IS"
+start_date = "2022-3-01"
+end_date = "2024-03-08"
 data = yf.download(ticker, start=start_date, end=end_date)
 
-# Calculate KAMA
-# data.ta.kama(close='Close', drift=1, append=True)
-data.ta.kama(close='Close', length=10, fast=1, slow=30, drift=1, append=True)
+# Calculate multiple KAMA
+data.ta.kama(close='Close', length=10, fast=1, slow=30, append=True)
+data.ta.kama(close='Close', length=10, fast=2, slow=30, append=True)
+data.ta.kama(close='Close', length=10, fast=5, slow=30, append=True)
 
 # Convert index to matplotlib date format
 data.reset_index(inplace=True)
 data['Date'] = data['Date'].apply(mdates.date2num)
 
-# Detecting Buy and Sell signals
-buy_signal = (data['KAMA_10_1_30'] > data['KAMA_10_1_30'].shift(1)) & (
-        data['KAMA_10_1_30'].shift(1) <= data['KAMA_10_1_30'].shift(2))
-sell_signal = (data['KAMA_10_1_30'] < data['KAMA_10_1_30'].shift(1)) & (
-        data['KAMA_10_1_30'].shift(1) >= data['KAMA_10_1_30'].shift(2))
+# Function to calculate buy and sell signals and capture the dates of those signals
+def calculate_signals(data, kama_key, safety_threshold=0.88):
+    last_signal = 'none'  # Possible values: 'buy', 'sell', 'none'
+    last_buy_price = None
+    buy_signal = []
+    sell_signal = []
+    buy_sell_pairs = []
+    signal_dates = []
 
-# Initialize variables for profit calculation
-last_10_profit = []
-last_10_buy_dates = []
-last_10_sell_dates = []
+    for i in range(2, len(data)):
+        current_price = data['Close'].iloc[i]
+        current_date = data['Date'].iloc[i]
+        if last_signal != 'buy' and data[kama_key].iloc[i] > data[kama_key].iloc[i - 1] and data[kama_key].iloc[i - 1] <= data[kama_key].iloc[i - 2]:
+            buy_signal.append(True)
+            sell_signal.append(False)
+            last_signal = 'buy'
+            last_buy_price = current_price
+        elif last_signal == 'buy' and ((data[kama_key].iloc[i] < data[kama_key].iloc[i - 1] and data[kama_key].iloc[i - 1] >= data[kama_key].iloc[i - 2] and current_price > last_buy_price) or current_price < last_buy_price * safety_threshold):
+            buy_signal.append(False)
+            sell_signal.append(True)
+            buy_sell_pairs.append((last_buy_price, current_price))
+            signal_dates.append(current_date)
+            last_signal = 'sell'
+            last_buy_price = None
+        else:
+            buy_signal.append(False)
+            sell_signal.append(False)
 
-# Extract last 10 buy and sell dates
-last_10_buy_dates = data.loc[buy_signal, 'Date'].iloc[-10:].apply(mdates.num2date)
-last_10_sell_dates = data.loc[sell_signal, 'Date'].iloc[-10:].apply(mdates.num2date)
+    buy_signal = [False, False] + buy_signal
+    sell_signal = [False, False] + sell_signal
 
-# Iterate through last 10 buy and sell signals
-for buy_date, sell_date in zip(last_10_buy_dates, last_10_sell_dates):
-    # Extracting high and low prices for the buy and sell dates
-    buy_price = data.loc[data['Date'] == mdates.date2num(buy_date), 'High'].values[0]
-    sell_price = data.loc[data['Date'] == mdates.date2num(sell_date), 'Low'].values[0]
+    return buy_signal, sell_signal, buy_sell_pairs, signal_dates
 
-    # Calculate profit or loss percentage
-    profit_loss_percentage = ((sell_price - buy_price) / buy_price) * 100
+# Calculate signals, profits, and signal dates for each KAMA configuration
+results = {}
+for fast in [1, 2, 5]:
+    kama_key = f'KAMA_10_{fast}_30'
+    data[f'Buy_Signal_{fast}'], data[f'Sell_Signal_{fast}'], pairs, signal_dates = calculate_signals(data, kama_key)
+    results[f'profits_{fast}'] = [(sell - buy) / buy * 100 for buy, sell in pairs]
+    results[f'dates_{fast}'] = signal_dates
 
-    # Store profit and buy/sell dates for last 10 pairs
-    last_10_profit.append(profit_loss_percentage)
+# Define figure and axes
+fig, (ax_candle, ax_profit) = plt.subplots(2, 1, figsize=(18, 10), gridspec_kw={'height_ratios': [2, 1]})
 
-# Calculate cumulative profit
-cumulative_profit = [sum(last_10_profit[:i+1]) for i in range(len(last_10_profit))]
+# Plot candlesticks with KAMA and buy/sell signals
+ax_candle.set_title(f'Candlestick Chart with KAMA Buy/Sell Signals for {ticker}')
+candlestick_ohlc(ax_candle, data[['Date', 'Open', 'High', 'Low', 'Close']].values, width=0.6, colorup='g', colordown='r', alpha=0.8)
 
-# Plotting
-fig, axs = plt.subplots(1, 2, figsize=(16, 6))
+colors = ['blue', 'orange', 'purple']
+signal_colors = {
+    1: {'buy': 'green', 'sell': 'red'},
+    2: {'buy': 'lime', 'sell': 'maroon'},
+    5: {'buy': 'black', 'sell': 'darkred'}
+}
 
-# Plotting candlesticks with KAMA and buy/sell signals
-axs[0].set_title('Candlestick Chart with KAMA Buy/Sell Signals for {}'.format(ticker))
-candlestick_ohlc(axs[0], data[['Date', 'Open', 'High', 'Low', 'Close']].values, width=0.6, colorup='g', colordown='r', alpha=0.8)
-axs[0].plot(data['Date'], data['KAMA_10_1_30'], label='KAMA (10, 2, 30)', color='blue')
-axs[0].plot(data.loc[buy_signal, 'Date'], data.loc[buy_signal, 'KAMA_10_1_30'], '^', color='g', markersize=10, label='Buy Signal')
-axs[0].plot(data.loc[sell_signal, 'Date'], data.loc[sell_signal, 'KAMA_10_1_30'], 'v', color='r', markersize=10, label='Sell Signal')
-axs[0].xaxis_date()
-axs[0].xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d-%h'))
-axs[0].set_xlabel('Date')
-axs[0].set_ylabel('Price')
-axs[0].legend()
-axs[0].grid(True)
-axs[0].tick_params(rotation=45)
+for i, fast in enumerate([1, 2, 5]):
+    kama_key = f'KAMA_10_{fast}_30'
+    ax_candle.plot(data['Date'], data[kama_key], label=f'KAMA (10, {fast}, 30)', color=colors[i])
+    ax_candle.plot(data.loc[data[f'Buy_Signal_{fast}'], 'Date'], data.loc[data[f'Buy_Signal_{fast}'], kama_key], '^', color=signal_colors[fast]['buy'], markersize=10, label=f'Buy Signal {fast}')
+    ax_candle.plot(data.loc[data[f'Sell_Signal_{fast}'], 'Date'], data.loc[data[f'Sell_Signal_{fast}'], kama_key], 'v', color=signal_colors[fast]['sell'], markersize=10, label=f'Sell Signal {fast}')
 
-# Plotting cumulative profit for last 10 buy-sell pairs
-axs[1].set_title('Cumulative Profit/Loss for Last 10 Buy-Sell Pairs for {}'.format(ticker))
-axs[1].plot_date(last_10_sell_dates, cumulative_profit, linestyle='-', marker='o', color='g', label='Cumulative Profit/Loss (%)')
-axs[1].set_xlabel('Date')
-axs[1].set_ylabel('Cumulative Profit/Loss (%)')
-axs[1].legend()
-axs[1].grid(True)
-axs[1].tick_params(rotation=45)
+ax_candle.xaxis_date()
+ax_candle.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+ax_candle.set_xlabel('Date')
+ax_candle.set_ylabel('Price')
+ax_candle.legend()
+ax_candle.grid(True)
+
+# Plot cumulative profit for all KAMA configurations, using dates for the x-axis
+ax_profit.set_title('Cumulative Profit for KAMA Configurations')
+for i, fast in enumerate([1, 2, 5]):
+    profits = results[f'profits_{fast}']
+    dates = results[f'dates_{fast}']
+    cumulative_profits = [sum(profits[:i + 1]) for i in range(len(profits))]
+    ax_profit.plot(mdates.num2date(dates), cumulative_profits, label=f'KAMA (10, {fast}, 30)', marker='o', linestyle='-', color=colors[i])
+
+ax_profit.xaxis_date()
+ax_profit.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+ax_profit.set_xlabel('Date')
+ax_profit.set_ylabel('Cumulative Profit (%)')
+ax_profit.legend()
+ax_profit.grid(True)
 
 plt.tight_layout()
 plt.show()
