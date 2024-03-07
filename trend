@@ -1,0 +1,60 @@
+//@version=5
+indicator('EMA + MACD', overlay=true, shorttitle='arda_eylul')
+src_1 = input(title='Source', defval=close)
+
+length1 = input(21, 'EMA21')
+plot(ta.ema(src_1, length1), color=color.new(color.purple, 0), linewidth=1, title='EMA21')
+
+length2 = input(55, 'EMA55')
+plot(ta.ema(src_1, length2), color=color.new(color.blue, 0), linewidth=1, title='EMA55')
+
+length3 = input(100, 'EMA100')
+plot(ta.ema(src_1, length3), color=color.new(color.black, 0), linewidth=1, title='EMA100')
+
+length4 = input(200, 'EMA200')
+plot(ta.ema(src_1, length4), color=color.new(color.red, 0), linewidth=1, title='EMA200')
+
+//kaufman
+// Input parameters
+length_2 = input(10, title="VWMA Length")
+fast = input(5, title="Fast Length")
+slow = input(15, title="Slow Length")
+include_ATR_bands = input(false, title="Include ATR Bands")
+ATR_length = input(21, title="ATR Length")
+ATR_multiplier = input(3, title="ATR Multiplier")
+
+// Calculate VWMA
+vwap = math.sum(hlc3 * volume, 5) / math.sum(volume, 5)
+
+// Calculate Change in price and Volatility for ER calculation
+price_change = math.abs(vwap - vwap[length_2])
+volatility = math.sum(math.abs(vwap - vwap[1]), length_2)
+
+// Calculate Efficiency Ratio (ER)
+ER = price_change / volatility
+
+// Calculate Smoothing Constant (SC)
+fastest_SC = (2.0 / (fast + 1))
+slowest_SC = (2.0 / (slow + 1))
+SC = math.pow(ER * (fastest_SC - slowest_SC) + slowest_SC, 2)
+
+// Calculate Initial VW-KAMA using EMA
+sma_initial = vwap
+
+var float VW_KAMA = na
+VW_KAMA := na(VW_KAMA[1]) ? sma_initial : (VW_KAMA[1] + SC * (vwap - VW_KAMA[1]))
+
+// Calculate ATR-based upper and lower bands
+atr_value = ta.atr(ATR_length)
+upper_band = VW_KAMA + ATR_multiplier * atr_value
+lower_band = VW_KAMA - ATR_multiplier * atr_value
+
+// Determine the color based on VW-KAMA's direction
+color_change = VW_KAMA > VW_KAMA[1] ? color.green : (VW_KAMA < VW_KAMA[1] ? color.red : color.blue)
+
+// Plot VW-KAMA
+plot(VW_KAMA, color=color_change, title="VW-KAMA")
+
+// Plot ATR-based upper and lower bands if selected
+plot(include_ATR_bands ? upper_band : na, color=color.blue, title="Upper ATR Band")
+plot(include_ATR_bands ? lower_band : na, color=color.blue, title="Lower ATR Band")

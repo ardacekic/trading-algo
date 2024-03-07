@@ -1,0 +1,91 @@
+import sys
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from PyQt5.QtWidgets import QApplication, QWidget, QPushButton, QVBoxLayout, QHBoxLayout
+import mplfinance as mpf
+import yfinance as yf
+
+# Date must be in the format ("%Y-%m-%d") That is, year-month-day
+start_date = '2024-01-06'  # 1 December 2020
+end_date = '2024-03-06'    # 2 February 2023
+# "start_date" must be an older date than the "end_date"
+
+# Download Amazon stock data
+amazon = yf.download(tickers="AMZN", start=start_date, end=end_date)
+
+# Download Apple stock data
+apple = yf.download(tickers="AAPL", start=start_date, end=end_date)
+
+def plot_stock(stock_data):
+    return mpf.plot(stock_data, type='candle', style='yahoo', title="The Stock Price", ylabel="Price (USD)", returnfig=True)
+
+
+class MyWindow(QWidget):
+    def __init__(self):
+        super().__init__()
+
+        # Create buttons
+        button1 = QPushButton('Amazon')
+        button2 = QPushButton('Apple')
+        button3 = QPushButton('Nike')
+        self.button1.clicked.connect(self.show_amazon)
+        self.button2.clicked.connect(self.show_apple)
+
+
+        # Create layout for buttons on the left
+        button_layout = QVBoxLayout()
+        button_layout.addWidget(button1)
+        button_layout.addWidget(button2)
+        button_layout.addWidget(button3)
+
+        def show_amazon(self):
+            plot_widget = plot_stock(amazon)
+            self.update_graph(plot_widget)
+
+        def show_apple(self):
+            plot_widget = plot_stock(apple)
+            self.update_graph(plot_widget)
+        
+        def update_graph(self, plot_widget):
+            if self.graph_layout.count() > 0:
+                item = self.graph_layout.takeAt(0)
+                widget = item.widget()
+                if widget:
+                    widget.deleteLater()
+
+        self.graph_layout.addWidget(plot_widget)
+
+        # Create graph
+        self.figure, self.ax = plt.subplots()
+        self.canvas = FigureCanvas(self.figure)
+        self.update_graph()
+
+        # Create layout for graph on the right
+        graph_layout = QVBoxLayout()
+        graph_layout.addWidget(self.canvas)
+
+        # Create main layout
+        main_layout = QHBoxLayout()
+        main_layout.addLayout(button_layout)
+        main_layout.addLayout(graph_layout)
+
+        self.setLayout(main_layout)
+        self.setWindowTitle('Buttons and Graph')
+
+    def plot_graph(self):
+        x = np.linspace(0, 10, 100)
+        y = np.sin(x)
+        self.ax.plot(x, y)
+        self.ax.set_xlabel('X-axis')
+        self.ax.set_ylabel('Y-axis')
+        self.figure.tight_layout()
+        self.canvas.draw()
+
+
+if __name__ == '__main__':
+    app = QApplication(sys.argv)
+    window = MyWindow()
+    window.setGeometry(100, 100, 800, 600)
+    window.show()
+    sys.exit(app.exec_())
