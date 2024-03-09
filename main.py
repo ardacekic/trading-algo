@@ -1,107 +1,81 @@
 import yfinance as yf
-import pandas_ta as ta
+import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
-from mplfinance.original_flavor import candlestick_ohlc
 import matplotlib.dates as mdates
-import datetime
+from mplfinance.original_flavor import candlestick_ohlc
 
-# Fetch data from Yahoo Finance
-ticker = "SOKM.IS"
-start_date = "2022-3-01"
-end_date = "2024-03-08"
-data = yf.download(ticker, start=start_date, end=end_date)
+# Fetch historical stock data
+symbol = 'XU100.IS'
+data = yf.download(symbol, start='2023-01-01', end='2024-03-08', interval='1d')
 
-# Calculate multiple KAMA
-data.ta.kama(close='Close', length=10, fast=1, slow=30, append=True)
-data.ta.kama(close='Close', length=10, fast=2, slow=30, append=True)
-data.ta.kama(close='Close', length=10, fast=5, slow=30, append=True)
-
-# Convert index to matplotlib date format
+# Ensure the index is a DatetimeIndex and reset it for ohlc
 data.reset_index(inplace=True)
 data['Date'] = data['Date'].apply(mdates.date2num)
 
-# Function to calculate buy and sell signals and capture the dates of those signals
-def calculate_signals(data, kama_key, safety_threshold=0.88):
-    last_signal = 'none'  # Possible values: 'buy', 'sell', 'none'
-    last_buy_price = None
-    buy_signal = []
-    sell_signal = []
-    buy_sell_pairs = []
-    signal_dates = []
+# Calculate VWMA
+length = 10
+fast = 2
+slow = 30
 
-    for i in range(2, len(data)):
-        current_price = data['Close'].iloc[i]
-        current_date = data['Date'].iloc[i]
-        if last_signal != 'buy' and data[kama_key].iloc[i] > data[kama_key].iloc[i - 1] and data[kama_key].iloc[i - 1] <= data[kama_key].iloc[i - 2]:
-            buy_signal.append(True)
-            sell_signal.append(False)
-            last_signal = 'buy'
-            last_buy_price = current_price
-        elif last_signal == 'buy' and ((data[kama_key].iloc[i] < data[kama_key].iloc[i - 1] and data[kama_key].iloc[i - 1] >= data[kama_key].iloc[i - 2] and current_price > last_buy_price) or current_price < last_buy_price * safety_threshold):
-            buy_signal.append(False)
-            sell_signal.append(True)
-            buy_sell_pairs.append((last_buy_price, current_price))
-            signal_dates.append(current_date)
-            last_signal = 'sell'
-            last_buy_price = None
-        else:
-            buy_signal.append(False)
-            sell_signal.append(False)
+data['hlc3'] = (data['High'] + data['Low'] + data['Close']) / 3
+data['vwap'] = (data['hlc3'] * data['Volume']).rolling(window=length).sum() / data['Volume'].rolling(window=length).sum()
 
-    buy_signal = [False, False] + buy_signal
-    sell_signal = [False, False] + sell_signal
+# Initialize columns for VW-KAMA
+data['price_change'] = np.abs(data['vwap'] - data['vwap'].shift(length))
+data['volatility'] = data['vwap'].diff().abs().rolling(window=length).sum()
+data['ER'] = data['price_change'] / data['volatility'].replace(0, np.nan)
+data['SC'] = ((data['ER'] * (2 / (fast + 1) - 2 / (slow + 1))) + 2 / (slow + 1)) ** 2
+data['VW_KAMA'] = np.nan
 
-    return buy_signal, sell_signal, buy_sell_pairs, signal_dates
+for i in range(length, len(data)):
+    if i == length or np.isnan(data.loc[i, 'VW_KAMA']):
+        data.loc[i, 'VW_KAMA'] = data.loc[i, 'vwap']
+    else:
+        data.loc[i, 'VW_KAMA'] = data.loc[i - 1, 'VW_KAMA'] + data.loc[i, 'SC'] * (data.loc[i, 'vwap'] - data.loc[i - 1, 'VW_KAMA'])
 
-# Calculate signals, profits, and signal dates for each KAMA configuration
-results = {}
-for fast in [1, 2, 5]:
-    kama_key = f'KAMA_10_{fast}_30'
-    data[f'Buy_Signal_{fast}'], data[f'Sell_Signal_{fast}'], pairs, signal_dates = calculate_signals(data, kama_key)
-    results[f'profits_{fast}'] = [(sell - buy) / buy * 100 for buy, sell in pairs]
-    results[f'dates_{fast}'] = signal_dates
+# Calculate MACD
+data['MACD'] = data['Close'].ewm(span=12, adjust=False).mean() - data['Close'].ewm(span=26, adjust=False).mean()
+data['Signal'] = data['MACD'].ewm(span=9, adjust=False).mean()
+data['Hist'] = data['MACD'] - data['Signal']
 
-# Define figure and axes
-fig, (ax_candle, ax_profit) = plt.subplots(2, 1, figsize=(18, 10), gridspec_kw={'height_ratios': [2, 1]})
+# Plotting with shared x-axis
+fig, (ax1, ax2) = plt.subplots(2, figsize=(14, 10), sharex=True, gridspec_kw={'height_ratios': [3, 1]})
 
-# Plot candlesticks with KAMA and buy/sell signals
-ax_candle.set_title(f'Candlestick Chart with KAMA Buy/Sell Signals for {ticker}')
-candlestick_ohlc(ax_candle, data[['Date', 'Open', 'High', 'Low', 'Close']].values, width=0.6, colorup='g', colordown='r', alpha=0.8)
+# Plot Candlestick (Price)
+candlestick_ohlc(ax1, data[['Date', 'Open', 'High', 'Low', 'Close']].values, width=0.6, colorup='green', colordown='red', alpha=0.8)
+ax1.xaxis_date()
 
-colors = ['blue', 'orange', 'purple']
-signal_colors = {
-    1: {'buy': 'green', 'sell': 'red'},
-    2: {'buy': 'lime', 'sell': 'maroon'},
-    5: {'buy': 'black', 'sell': 'darkred'}
-}
+# Plot VW-KAMA with dynamic color based on direction
+for i in range(1, len(data)):
+    if data['VW_KAMA'].iloc[i] > data['VW_KAMA'].iloc[i - 1]:
+        ax1.plot(data['Date'].iloc[i - 1:i + 1], data['VW_KAMA'].iloc[i - 1:i + 1], color='green')
+    elif data['VW_KAMA'].iloc[i] < data['VW_KAMA'].iloc[i - 1]:
+        ax1.plot(data['Date'].iloc[i - 1:i + 1], data['VW_KAMA'].iloc[i - 1:i + 1], color='red')
+    else:
+        ax1.plot(data['Date'].iloc[i - 1:i + 1], data['VW_KAMA'].iloc[i - 1:i + 1], color='blue')
 
-for i, fast in enumerate([1, 2, 5]):
-    kama_key = f'KAMA_10_{fast}_30'
-    ax_candle.plot(data['Date'], data[kama_key], label=f'KAMA (10, {fast}, 30)', color=colors[i])
-    ax_candle.plot(data.loc[data[f'Buy_Signal_{fast}'], 'Date'], data.loc[data[f'Buy_Signal_{fast}'], kama_key], '^', color=signal_colors[fast]['buy'], markersize=10, label=f'Buy Signal {fast}')
-    ax_candle.plot(data.loc[data[f'Sell_Signal_{fast}'], 'Date'], data.loc[data[f'Sell_Signal_{fast}'], kama_key], 'v', color=signal_colors[fast]['sell'], markersize=10, label=f'Sell Signal {fast}')
+ax1.grid(True)
 
-ax_candle.xaxis_date()
-ax_candle.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
-ax_candle.set_xlabel('Date')
-ax_candle.set_ylabel('Price')
-ax_candle.legend()
-ax_candle.grid(True)
+# Plot MACD
+ax2.plot(data['Date'], data['MACD'], label='MACD', color='blue')
+ax2.plot(data['Date'], data['Signal'], label='Signal', color='orange')
 
-# Plot cumulative profit for all KAMA configurations, using dates for the x-axis
-ax_profit.set_title('Cumulative Profit for KAMA Configurations')
-for i, fast in enumerate([1, 2, 5]):
-    profits = results[f'profits_{fast}']
-    dates = results[f'dates_{fast}']
-    cumulative_profits = [sum(profits[:i + 1]) for i in range(len(profits))]
-    ax_profit.plot(mdates.num2date(dates), cumulative_profits, label=f'KAMA (10, {fast}, 30)', marker='o', linestyle='-', color=colors[i])
+# Plot Histogram
+colors = ['green' if val >= 0 else 'red' for val in data['Hist']]
+ax2.bar(data['Date'], data['Hist'], color=colors, width=0.6)
 
-ax_profit.xaxis_date()
-ax_profit.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
-ax_profit.set_xlabel('Date')
-ax_profit.set_ylabel('Cumulative Profit (%)')
-ax_profit.legend()
-ax_profit.grid(True)
+ax2.xaxis_date()
+ax2.xaxis.set_major_locator(mdates.WeekdayLocator(byweekday=mdates.MO))
+ax2.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+ax2.grid(True)
 
-plt.tight_layout()
+# Rotate date labels for both plots
+plt.setp(ax2.xaxis.get_majorticklabels(), rotation=45)
+
+# Labels and Title for MACD
+ax2.set_xlabel("Date")
+ax2.set_ylabel("MACD")
+ax1.set_title(f"{symbol} Stock Price and VW-KAMA Indicator with MACD")
+
 plt.show()
